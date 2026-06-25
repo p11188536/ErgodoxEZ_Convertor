@@ -1,24 +1,10 @@
 # ErgodoxEZ_Convertor
-To solve the mirror-image problem of my ergodoxEZ.
- 
-This tool is based on `Windows` and `Linux`, and compiled successfully under `VS2017` and `Ubuntu16.04` with gcc version 5.4.0
+This repository provides a workaround for my ErgoDox EZ keyboard, whose left and right halves were assembled in reverse.
+
 ## How to use
-+ Download sourcecode.
-+ In Linux, execute:
-```
-g++ ./main.cpp -o ergoconv
-```
-+ In Windows, compile sourcecode with `VS2017` or other IDE/compiler.
-
-## Usage
-+ Windwos
-```
-convertor [file.c]
-```
-+ Linux
-```
-./ergoconv [file.c]
-```
-Where `file.c` represents the original keymap file generated online. 
-The converted keymap file `keymap.c` will be generated after the program complete its execution  successfully.
-
+0. Fork this repo
+1. Create your keyboard layout using [ORYX](https://configure.zsa.io/home)
+2. Right-click `Download Source` and copy the download link
+3. Open an issue in this repository and use the download link as the issue title
+4. Wait for the GitHub Actions workflow to finish
+5. Download the generated firmware from `Releases`, then flash it to the keyboard
