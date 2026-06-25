@@ -1,0 +1,66 @@
+name: CV Builder Action
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    if: github.event.issue.author_association == 'OWNER'
+    runs-on: ubuntu-latest
+    container: ghcr.io/qmk/qmk_cli
+    steps:
+      - name: Disable git safe directory checks
+        run : git config --global --add safe.directory '*'
+            
+      - name: Checkout ZSA's QMK Fork
+        uses: actions/checkout@v7
+        with:
+          repository: zsa/qmk_firmware
+          submodules: recursive
+      
+      - name: Download Keyboard Configuration
+        run: |
+          wget ${{ github.event.issue.title }} -O kbconfig.zip
+          unzip kbconfig.zip -d __tmp__kbconfig
+          kbdir="$(find __tmp__kbconfig -maxdepth 1 -type d -name 'zsa_ergodox_ez*' | head -n 1)"
+          if [ -z "$kbdir" ]; then
+            echo "No zsa_ergodox_ez_* directory found"
+            exit 1
+          fi
+          mv "$kbdir" keyboards/zsa/ergodox_ez/keymaps/my_custom
+
+      - name: Check out this repo
+        uses: actions/checkout@v7
+        with:
+          path: my_custom_conv
+      
+      - name: Fix Keymap
+        run: |
+          python my_custom_conv/convert.py keyboards/zsa/ergodox_ez/keymaps/my_custom/keymap.c
+      
+      - name: Build Firmware
+        run: qmk compile -kb ergodox_ez -km my_custom
+          
+      - name: Get Current Time
+        id: time
+        run: echo "date=$(date +'%Y-%m-%d-%H-%M-%S-%N')" >> $GITHUB_OUTPUT
+      
+      - name: Collect Artifacts
+        run: |
+          mkdir -p __artifacts
+          find . -maxdepth 1 -type f -name '*.hex' -print -exec cp {} __artifacts/ \;
+
+          (
+            cd keyboards/zsa/ergodox_ez/keymaps/my_custom
+            zip -r ../../../../../__artifacts/keymap.zip .
+          ) 
+
+      - name: Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: __artifacts/*
+          tag_name: build-${{ github.event.issue.number }}-${{ steps.time.outputs.date }}
