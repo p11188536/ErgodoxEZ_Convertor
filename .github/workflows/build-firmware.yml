@@ -40,7 +40,8 @@ jobs:
       
       - name: Fix Keymap
         run: |
-          python my_custom_conv/convert.py keyboards/zsa/ergodox_ez/keymaps/my_custom/keymap.c
+          qmk c2json -kb ergodox_ez -km my_custom --no-cpp -o __keymap.c.json keyboards/zsa/ergodox_ez/keymaps/my_custom/keymap.c
+          python my_custom_conv/convert.py keyboards/zsa/ergodox_ez/keymaps/my_custom/keymap.c __keymap.c.json
       
       - name: Build Firmware
         run: qmk compile -kb ergodox_ez -km my_custom

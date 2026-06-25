@@ -1,109 +1,203 @@
-# import sys
+#!/usr/bin/env python3
+import argparse
+import json
+import re
+from pathlib import Path
 
 
-# def swap(lst, i, j):
-#     """Helper function to mimic the C++ swap logic."""
-#     lst[i], lst[j] = lst[j], lst[i]
+LAYOUT = "LAYOUT_ergodox_pretty"
+
+# qmk c2json 里的 layers 顺序对应 LAYOUT_ergodox_pretty 的 76 个参数。
+# 每一行左右反转即可修正“左右手镜像”的问题。
+ROW_SIZES = [
+    14,  # top / number row
+    14,  # qwerty row
+    12,  # home row
+    14,  # bottom alpha row
+    10,  # lower / arrow row
+    4,   # thumb top
+    2,   # thumb middle
+    6,   # thumb bottom
+]
 
 
-# def main():
-#     # Check for command line arguments
-#     if len(sys.argv) < 2:
-#         print("invalid input!", file=sys.stderr)
-#         sys.exit(-1)
+def mirror_layer(layer: list[str]) -> list[str]:
+    expected = sum(ROW_SIZES)
+    if len(layer) != expected:
+        raise ValueError(f"expected {expected} keys, got {len(layer)}")
 
-#     input_filename = sys.argv[1]
+    out = []
+    pos = 0
 
-#     # Read the initial file content
-#     try:
-#         with open(input_filename, "r") as inf:
-#             lines = inf.readlines()
-#     except IOError:
-#         print("Can't open file!", file=sys.stderr)
-#         sys.exit(-1)
+    for size in ROW_SIZES:
+        row = layer[pos:pos + size]
+        out.extend(reversed(row))
+        pos += size
 
-#     keys = []
-#     num = 0
-
-#     # First Pass: Extract key layouts
-#     for line in lines:
-#         line_str = line.rstrip("\r\n")
-#         pos = line_str.find("LAYOUT_ergodox")
-
-#         if pos != -1:
-#             pos += 15
-#             current_pos = pos
-#             row_keys = []
-
-#             for i in range(76):
-#                 np = line_str.find(",", current_pos)
-#                 if np != -1:
-#                     if i != 75:
-#                         item = line_str[current_pos:np]
-#                     else:
-#                         item = line_str[current_pos : np - 1]
-#                     row_keys.append(item)
-#                     current_pos = np + 1
-#                 else:
-#                     print("Wrong!", file=sys.stderr)
-#                     sys.exit(-1)
-
-#             keys.append(row_keys)
-#             num += 1
-#             if num == 3:
-#                 break
-
-#     # Perform the layout swaps (mirrors left/right halves of the Ergodox layout)
-#     for i in range(len(keys)):
-#         # Rows 1-5 mirroring
-#         for k in range(7):
-#             swap(keys[i], k, 44 - k)
-#         for k in range(7):
-#             swap(keys[i], 7 + k, 51 - k)
-#         for k in range(6):
-#             swap(keys[i], 14 + k, 57 - k)
-#         for k in range(7):
-#             swap(keys[i], 20 + k, 64 - k)
-#         for k in range(5):
-#             swap(keys[i], 27 + k, 69 - k)
-
-#         # Thumb cluster mirroring
-#         swap(keys[i], 32, 71)
-#         swap(keys[i], 33, 70)
-#         swap(keys[i], 34, 72)
-#         swap(keys[i], 35, 75)
-#         swap(keys[i], 36, 74)
-#         swap(keys[i], 37, 73)
-
-#     # Second Pass: Reconstruct and write out to keymap.c
-#     try:
-#         with open("keymap.c", "w") as of:
-#             num = 0
-#             for line in lines:
-#                 line_str = line.rstrip("\r\n")
-#                 pos = line_str.find("LAYOUT_ergodox")
-
-#                 if pos == -1 or num >= len(keys):
-#                     of.write(line_str + "\n")
-#                 else:
-#                     pos += 15
-#                     out_line = line_str[:pos]
-
-#                     for i in range(76):
-#                         out_line += keys[num][i]
-#                         if i != 75:
-#                             out_line += ","
-#                         else:
-#                             out_line += "),"
-
-#                     of.write(out_line + "\n")
-#                     num += 1
-#     except IOError:
-#         print("Can't write to file!", file=sys.stderr)
-#         sys.exit(-1)
-
-#     print("done!")
+    return out
 
 
-# if __name__ == "__main__":
-#     main()
+def mirror_json_keymap(data: dict) -> dict:
+    layout = data.get("layout")
+    if layout != LAYOUT:
+        raise ValueError(f"expected layout {LAYOUT}, got {layout!r}")
+
+    data = dict(data)
+    data["layers"] = [mirror_layer(layer) for layer in data["layers"]]
+    return data
+
+
+def format_layer(layer_index: int, layer: list[str]) -> str:
+    lines = [f"  [{layer_index}] = {LAYOUT}("]
+
+    pos = 0
+    for row_idx, size in enumerate(ROW_SIZES):
+        row = layer[pos:pos + size]
+        pos += size
+
+        comma = "," if row_idx != len(ROW_SIZES) - 1 else ""
+        lines.append("    " + ", ".join(row) + comma)
+
+    lines.append("  )")
+    return "\n".join(lines)
+
+
+def generate_keymaps_block(data: dict) -> str:
+    layers = data["layers"]
+
+    parts = [
+        "const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {"
+    ]
+
+    for i, layer in enumerate(layers):
+        layer_text = format_layer(i, layer)
+        if i != len(layers) - 1:
+            layer_text += ","
+        parts.append(layer_text)
+
+    parts.append("};")
+    return "\n".join(parts)
+
+
+def find_matching_brace(text: str, open_idx: int) -> int:
+    if text[open_idx] != "{":
+        raise ValueError("open_idx does not point to '{'")
+
+    depth = 1
+    i = open_idx + 1
+
+    in_str = None
+    esc = False
+    line_comment = False
+    block_comment = False
+
+    while i < len(text):
+        c = text[i]
+        n = text[i + 1] if i + 1 < len(text) else ""
+
+        if line_comment:
+            if c == "\n":
+                line_comment = False
+            i += 1
+            continue
+
+        if block_comment:
+            if c == "*" and n == "/":
+                block_comment = False
+                i += 2
+            else:
+                i += 1
+            continue
+
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == in_str:
+                in_str = None
+            i += 1
+            continue
+
+        if c == "/" and n == "/":
+            line_comment = True
+            i += 2
+            continue
+
+        if c == "/" and n == "*":
+            block_comment = True
+            i += 2
+            continue
+
+        if c in ("'", '"'):
+            in_str = c
+            i += 1
+            continue
+
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+
+        i += 1
+
+    raise ValueError("cannot find matching '}'")
+
+
+def replace_keymaps_block(keymap_c_text: str, new_block: str) -> str:
+    m = re.search(
+        r"const\s+uint16_t\s+PROGMEM\s+keymaps\s*"
+        r"\[\]\s*\[MATRIX_ROWS\]\s*\[MATRIX_COLS\]\s*=\s*\{",
+        keymap_c_text,
+    )
+
+    if not m:
+        raise ValueError("cannot find keymaps[] block in keymap.c")
+
+    open_brace = keymap_c_text.rfind("{", 0, m.end())
+    close_brace = find_matching_brace(keymap_c_text, open_brace)
+
+    end = close_brace + 1
+
+    # include trailing semicolon
+    while end < len(keymap_c_text) and keymap_c_text[end].isspace():
+        end += 1
+
+    if end >= len(keymap_c_text) or keymap_c_text[end] != ";":
+        raise ValueError("keymaps block is not followed by ';'")
+
+    end += 1
+
+    return keymap_c_text[:m.start()] + new_block + keymap_c_text[end:]
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("keymap_c", help="path to keymap.c")
+    parser.add_argument("keymap_json", help="path to JSON generated by qmk c2json")
+    parser.add_argument("--no-backup", action="store_true")
+    args = parser.parse_args()
+
+    keymap_c_path = Path(args.keymap_c)
+    keymap_json_path = Path(args.keymap_json)
+
+    keymap_c_text = keymap_c_path.read_text(encoding="utf-8")
+    data = json.loads(keymap_json_path.read_text(encoding="utf-8"))
+
+    mirrored = mirror_json_keymap(data)
+    new_block = generate_keymaps_block(mirrored)
+    new_keymap_c_text = replace_keymaps_block(keymap_c_text, new_block)
+
+    if not args.no_backup:
+        backup_path = keymap_c_path.with_suffix(keymap_c_path.suffix + ".bak")
+        backup_path.write_text(keymap_c_text, encoding="utf-8")
+        print(f"backup written to {backup_path}")
+
+    keymap_c_path.write_text(new_keymap_c_text, encoding="utf-8")
+    print(f"updated {keymap_c_path}")
+
+
+if __name__ == "__main__":
+    main()
